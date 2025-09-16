@@ -208,7 +208,7 @@ def validate_url(url, allow_empty=False):
         return True
     pattern = re.compile(
         r"^(?:http|https)://"
-        r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|"
+        r"(?:(?:[A-Z00-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|"
         r"localhost|"
         r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"
         r"(?::\d+)?"
@@ -498,6 +498,8 @@ class SetupWizard:
                     stderr=subprocess.PIPE,
                     check=True,
                     shell=IS_WINDOWS,
+                    encoding="utf-8",
+                    errors="ignore"
                 )
                 print_success(f"{cmd} is installed.")
             except (subprocess.SubprocessError, FileNotFoundError):
@@ -525,6 +527,8 @@ class SetupWizard:
                 stderr=subprocess.PIPE,
                 check=True,
                 shell=IS_WINDOWS,
+                encoding="utf-8",
+                errors="ignore"
             )
             print_success("Docker is running.")
             return True
@@ -1134,6 +1138,8 @@ class SetupWizard:
                 check=True,
                 capture_output=True,
                 shell=IS_WINDOWS,
+                encoding="utf-8",
+                errors="ignore"
             )
         except (subprocess.SubprocessError, FileNotFoundError):
             print_error(
@@ -1160,7 +1166,7 @@ class SetupWizard:
 
         try:
             print_info("Logging into Supabase CLI...")
-            subprocess.run(["supabase", "login"], check=True, shell=IS_WINDOWS)
+            subprocess.run(["supabase", "login"], check=True, shell=IS_WINDOWS, encoding="utf-8", errors="ignore")
 
             print_info(f"Linking to Supabase project {project_ref}...")
             subprocess.run(
@@ -1168,11 +1174,13 @@ class SetupWizard:
                 cwd="backend",
                 check=True,
                 shell=IS_WINDOWS,
+                encoding="utf-8",
+                errors="ignore"
             )
 
             print_info("Pushing database migrations...")
             subprocess.run(
-                ["supabase", "db", "push"], cwd="backend", check=True, shell=IS_WINDOWS
+                ["supabase", "db", "push"], cwd="backend", check=True, shell=IS_WINDOWS, encoding="utf-8", errors="ignore"
             )
             print_success("Database migrations pushed successfully.")
 
@@ -1203,7 +1211,7 @@ class SetupWizard:
         try:
             print_info("Installing frontend dependencies with npm...")
             subprocess.run(
-                ["npm", "install"], cwd="frontend", check=True, shell=IS_WINDOWS
+                ["npm", "install"], cwd="frontend", check=True, shell=IS_WINDOWS, encoding="utf-8", errors="ignore"
             )
             print_success("Frontend dependencies installed.")
 
@@ -1215,7 +1223,7 @@ class SetupWizard:
             if not venv_exists:
                 print_info("Creating virtual environment...")
                 subprocess.run(
-                    ["uv", "venv"], cwd="backend", check=True, shell=IS_WINDOWS
+                    ["uv", "venv"], cwd="backend", check=True, shell=IS_WINDOWS, encoding="utf-8", errors="ignore"
                 )
                 print_success("Virtual environment created.")
 
@@ -1225,13 +1233,16 @@ class SetupWizard:
                 cwd="backend",
                 check=True,
                 shell=IS_WINDOWS,
+                encoding="utf-8",
+                errors="ignore"
             )
             print_success("Backend dependencies and package installed.")
 
         except subprocess.SubprocessError as e:
             print_error(f"Failed to install dependencies: {e}")
             print_info(
-                "Please install dependencies manually and run the script again.")
+                "Please install dependencies manually and run the script again."
+            )
             sys.exit(1)
 
     def start_suna(self):
@@ -1244,6 +1255,8 @@ class SetupWizard:
                     ["docker", "compose", "up", "-d", "--build"],
                     check=True,
                     shell=IS_WINDOWS,
+                    encoding="utf-8",
+                    errors="ignore"
                 )
                 print_info("Waiting for services to spin up...")
                 time.sleep(15)
@@ -1253,6 +1266,8 @@ class SetupWizard:
                     capture_output=True,
                     text=True,
                     shell=IS_WINDOWS,
+                    encoding="utf-8",
+                    errors="ignore"
                 )
                 if "backend" in result.stdout and "frontend" in result.stdout:
                     print_success("Suna services are starting up!")

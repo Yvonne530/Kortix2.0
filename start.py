@@ -5,6 +5,14 @@ import sys
 import platform
 import os
 import json
+import io
+
+# --- 尽量把本进程的终端编码切到 UTF-8（对控制台输出更友好，不影响子进程读取逻辑）---
+try:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="ignore")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="ignore")
+except Exception:
+    pass
 
 IS_WINDOWS = platform.system() == "Windows"
 PROGRESS_FILE = ".setup_progress"
@@ -23,41 +31,75 @@ class Colors:
     UNDERLINE = "\033[4m"
 
 
+# --- 子进程调用封装（核心修复点） ---
+def run_cmd(cmd, check=False, passthrough=False):
+    """
+    运行命令：
+    - passthrough=True：不捕获输出，直接让子进程向控制台写（零解码，最稳）。
+    - passthrough=False：捕获为 bytes，函数内用 UTF-8 + ignore 解码成 str 返回。
+    """
+    if passthrough:
+        # 不捕获输出 -> Python 不会起 reader 线程，自然没有 GBK 解码问题
+        cp = subprocess.run(
+            cmd,
+            shell=IS_WINDOWS,
+            stdout=None,
+            stderr=None,
+            check=check,
+        )
+        return "", "", cp.returncode
+
+    # 捕获 bytes，自行解码
+    cp = subprocess.run(
+        cmd,
+        shell=IS_WINDOWS,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False if not check else True,
+    )
+    out = cp.stdout.decode("utf-8", errors="ignore") if cp.stdout else ""
+    err = cp.stderr.decode("utf-8", errors="ignore") if cp.stderr else ""
+    return out, err, cp.returncode
+
+
 def load_progress():
     """Loads the last saved step and data from setup."""
     if os.path.exists(PROGRESS_FILE):
-        with open(PROGRESS_FILE, "r") as f:
-            try:
+        try:
+            with open(PROGRESS_FILE, "r", encoding="utf-8", errors="ignore") as f:
                 return json.load(f)
-            except (json.JSONDecodeError, KeyError):
-                return {"step": 0, "data": {}}
+        except Exception:
+            return {"step": 0, "data": {}}
     return {"step": 0, "data": {}}
 
 
 def get_setup_method():
     """Gets the setup method chosen during setup."""
-    progress = load_progress()
-    return progress.get("data", {}).get("setup_method")
+    progress = load_progress() or {}
+    data = progress.get("data") or {}
+    return data.get("setup_method")
 
 
 def check_docker_available():
     """Check if Docker is available and running."""
     try:
-        result = subprocess.run(["docker", "version"], capture_output=True, shell=IS_WINDOWS, check=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print(f"{Colors.RED}❌ Docker is not running or not installed.{Colors.ENDC}")
+        # 这里不捕获输出，避免任何编码问题；只看返回码
+        _, _, code = run_cmd(["docker", "version"], passthrough=False)
+        if code == 0:
+            return True
+        print(f"{Colors.RED}❌ Docker seems unavailable (non-zero exit).{Colors.ENDC}")
         print(f"{Colors.YELLOW}Please start Docker and try again.{Colors.ENDC}")
         return False
+    except FileNotFoundError:
+        print(f"{Colors.RED}❌ Docker is not installed or not in PATH.{Colors.ENDC}")
+        print(f"{Colors.YELLOW}Please install/start Docker and try again.{Colors.ENDC}")
+        return False
+
 
 def check_docker_compose_up():
-    result = subprocess.run(
-        ["docker", "compose", "ps", "-q"],
-        capture_output=True,
-        text=True,
-        shell=IS_WINDOWS,
-    )
-    return len(result.stdout.strip()) > 0
+    # 这里需要读取输出 -> 捕获为 bytes 自己解码
+    out, _, _ = run_cmd(["docker", "compose", "ps", "-q"], passthrough=False)
+    return len(out.strip()) > 0
 
 
 def print_manual_instructions():
@@ -106,8 +148,6 @@ def main():
         setup_method = "docker"
 
     if setup_method == "manual":
-        # For manual setup, we only manage infrastructure services (redis)
-        # and show instructions for the rest
         print(f"{Colors.BLUE}{Colors.BOLD}Manual Setup Detected{Colors.ENDC}")
         print("Managing infrastructure services (Redis)...\n")
 
@@ -115,13 +155,8 @@ def main():
         if force:
             print("Force awakened. Skipping confirmation.")
 
-        is_infra_up = subprocess.run(
-            ["docker", "compose", "ps", "-q", "redis"],
-            capture_output=True,
-            text=True,
-            shell=IS_WINDOWS,
-        )
-        is_up = len(is_infra_up.stdout.strip()) > 0
+        out, _, _ = run_cmd(["docker", "compose", "ps", "-q", "redis"])
+        is_up = len(out.strip()) > 0
 
         if is_up:
             action = "stop"
@@ -142,12 +177,11 @@ def main():
                     return
 
         if action == "stop":
-            subprocess.run(["docker", "compose", "down"], shell=IS_WINDOWS)
+            # 不捕获输出，直接透传，避免任何编码问题
+            run_cmd(["docker", "compose", "down"], passthrough=True)
             print(f"\n{Colors.GREEN}✅ Infrastructure services stopped.{Colors.ENDC}")
         else:
-            subprocess.run(
-                ["docker", "compose", "up", "redis", "-d"], shell=IS_WINDOWS
-            )
+            run_cmd(["docker", "compose", "up", "redis", "-d"], passthrough=True)
             print(f"\n{Colors.GREEN}✅ Infrastructure services started.{Colors.ENDC}")
             print_manual_instructions()
 
@@ -161,7 +195,7 @@ def main():
 
         if not check_docker_available():
             return
-            
+
         is_up = check_docker_compose_up()
 
         if is_up:
@@ -183,10 +217,10 @@ def main():
                     return
 
         if action == "stop":
-            subprocess.run(["docker", "compose", "down"], shell=IS_WINDOWS)
+            run_cmd(["docker", "compose", "down"], passthrough=True)
             print(f"\n{Colors.GREEN}✅ All Suna services stopped.{Colors.ENDC}")
         else:
-            subprocess.run(["docker", "compose", "up", "-d"], shell=IS_WINDOWS)
+            run_cmd(["docker", "compose", "up", "-d"], passthrough=True)
             print(f"\n{Colors.GREEN}✅ All Suna services started.{Colors.ENDC}")
             print(f"{Colors.CYAN}🌐 Access Suna at: http://localhost:3000{Colors.ENDC}")
 

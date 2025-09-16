@@ -266,130 +266,33 @@ class MCPManager:
 
 
 class PromptManager:
+    def __init__(self):
+        self.dynamic_manager = DynamicPromptManager()
+    
     @staticmethod
     async def build_system_prompt(model_name: str, agent_config: Optional[dict], 
                                   thread_id: str, 
                                   mcp_wrapper_instance: Optional[MCPToolWrapper],
                                   client=None) -> dict:
         
-        default_system_content = get_system_prompt()
+        # 使用动态提示词管理器
+        dynamic_manager = DynamicPromptManager()
         
-        if "anthropic" not in model_name.lower():
-            sample_response_path = os.path.join(os.path.dirname(__file__), 'prompts/samples/1.txt')
-            with open(sample_response_path, 'r') as file:
-                sample_response = file.read()
-            default_system_content = default_system_content + "\n\n <sample_assistant_response>" + sample_response + "</sample_assistant_response>"
+        # 分析任务上下文
+        context = await dynamic_manager.analyze_context(thread_id, agent_config)
         
-        # Start with agent's normal system prompt or default
-        if agent_config and agent_config.get('system_prompt'):
-            system_content = agent_config['system_prompt'].strip()
-        else:
-            system_content = default_system_content
+        # 构建上下文感知的提示词
+        system_content = dynamic_manager.build_context_aware_prompt(
+            task_type=context.get('task_type', 'general'),
+            context=context
+        )
         
-        # Check if agent has builder tools enabled - append the full builder prompt
-        if agent_config:
-            agentpress_tools = agent_config.get('agentpress_tools', {})
-            has_builder_tools = any(
-                agentpress_tools.get(tool, False) 
-                for tool in ['agent_config_tool', 'mcp_search_tool', 'credential_profile_tool', 'workflow_tool', 'trigger_tool']
-            )
-            
-            if has_builder_tools:
-                # Append the full agent builder prompt to the existing system prompt
-                builder_prompt = get_agent_builder_prompt()
-                system_content += f"\n\n{builder_prompt}"
-        
-        # Add agent knowledge base context if available
-        if agent_config and client and 'agent_id' in agent_config:
-            try:
-                logger.debug(f"Retrieving agent knowledge base context for agent {agent_config['agent_id']}")
-                
-                # Use only agent-based knowledge base context
-                kb_result = await client.rpc('get_agent_knowledge_base_context', {
-                    'p_agent_id': agent_config['agent_id']
-                }).execute()
-                
-                if kb_result.data and kb_result.data.strip():
-                    logger.debug(f"Found agent knowledge base context, adding to system prompt (length: {len(kb_result.data)} chars)")
-                    # logger.debug(f"Knowledge base data object: {kb_result.data[:500]}..." if len(kb_result.data) > 500 else f"Knowledge base data object: {kb_result.data}")
-                    
-                    # Construct a well-formatted knowledge base section
-                    kb_section = f"""
+        # 返回动态生成的提示词
+        return {
+            "role": "system",
+            "content": system_content
+        }
 
-                    === AGENT KNOWLEDGE BASE ===
-                    NOTICE: The following is your specialized knowledge base. This information should be considered authoritative for your responses and should take precedence over general knowledge when relevant.
-
-                    {kb_result.data}
-
-                    === END AGENT KNOWLEDGE BASE ===
-
-                    IMPORTANT: Always reference and utilize the knowledge base information above when it's relevant to user queries. This knowledge is specific to your role and capabilities."""
-                    
-                    system_content += kb_section
-                else:
-                    logger.debug("No knowledge base context found for this agent")
-                    
-            except Exception as e:
-                logger.error(f"Error retrieving knowledge base context for agent {agent_config.get('agent_id', 'unknown')}: {e}")
-                # Continue without knowledge base context rather than failing
-        
-        if agent_config and (agent_config.get('configured_mcps') or agent_config.get('custom_mcps')) and mcp_wrapper_instance and mcp_wrapper_instance._initialized:
-            mcp_info = "\n\n--- MCP Tools Available ---\n"
-            mcp_info += "You have access to external MCP (Model Context Protocol) server tools.\n"
-            mcp_info += "MCP tools can be called directly using their native function names in the standard function calling format:\n"
-            mcp_info += '<function_calls>\n'
-            mcp_info += '<invoke name="{tool_name}">\n'
-            mcp_info += '<parameter name="param1">value1</parameter>\n'
-            mcp_info += '<parameter name="param2">value2</parameter>\n'
-            mcp_info += '</invoke>\n'
-            mcp_info += '</function_calls>\n\n'
-            
-            mcp_info += "Available MCP tools:\n"
-            try:
-                registered_schemas = mcp_wrapper_instance.get_schemas()
-                for method_name, schema_list in registered_schemas.items():
-                    for schema in schema_list:
-                        if schema.schema_type == SchemaType.OPENAPI:
-                            func_info = schema.schema.get('function', {})
-                            description = func_info.get('description', 'No description available')
-                            mcp_info += f"- **{method_name}**: {description}\n"
-                            
-                            params = func_info.get('parameters', {})
-                            props = params.get('properties', {})
-                            if props:
-                                mcp_info += f"  Parameters: {', '.join(props.keys())}\n"
-                                
-            except Exception as e:
-                logger.error(f"Error listing MCP tools: {e}")
-                mcp_info += "- Error loading MCP tool list\n"
-            
-            mcp_info += "\n🚨 CRITICAL MCP TOOL RESULT INSTRUCTIONS 🚨\n"
-            mcp_info += "When you use ANY MCP (Model Context Protocol) tools:\n"
-            mcp_info += "1. ALWAYS read and use the EXACT results returned by the MCP tool\n"
-            mcp_info += "2. For search tools: ONLY cite URLs, sources, and information from the actual search results\n"
-            mcp_info += "3. For any tool: Base your response entirely on the tool's output - do NOT add external information\n"
-            mcp_info += "4. DO NOT fabricate, invent, hallucinate, or make up any sources, URLs, or data\n"
-            mcp_info += "5. If you need more information, call the MCP tool again with different parameters\n"
-            mcp_info += "6. When writing reports/summaries: Reference ONLY the data from MCP tool results\n"
-            mcp_info += "7. If the MCP tool doesn't return enough information, explicitly state this limitation\n"
-            mcp_info += "8. Always double-check that every fact, URL, and reference comes from the MCP tool output\n"
-            mcp_info += "\nIMPORTANT: MCP tool results are your PRIMARY and ONLY source of truth for external data!\n"
-            mcp_info += "NEVER supplement MCP results with your training data or make assumptions beyond what the tools provide.\n"
-            
-            system_content += mcp_info
-
-        now = datetime.datetime.now(datetime.timezone.utc)
-        datetime_info = f"\n\n=== CURRENT DATE/TIME INFORMATION ===\n"
-        datetime_info += f"Today's date: {now.strftime('%A, %B %d, %Y')}\n"
-        datetime_info += f"Current UTC time: {now.strftime('%H:%M:%S UTC')}\n"
-        datetime_info += f"Current year: {now.strftime('%Y')}\n"
-        datetime_info += f"Current month: {now.strftime('%B')}\n"
-        datetime_info += f"Current day: {now.strftime('%A')}\n"
-        datetime_info += "Use this information for any time-sensitive tasks, research, or when current date/time context is needed.\n"
-        
-        system_content += datetime_info
-
-        return {"role": "system", "content": system_content}
 
 
 class MessageManager:

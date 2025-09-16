@@ -1,211 +1,239 @@
-<div align="center">
 
-# Kortix – Open Source Platform to Build, Manage and Train AI Agents
+🔹 1️⃣ Kortix 2.0 技术说明文档（Markdown）
+# Kortix 2.0 技术说明文档
 
-![Kortix Screenshot](frontend/public/banner.png)
+## 版本目标
+Kortix 2.0 在保持原有功能的基础上，提升以下方面：
+1. **安全性**：强化容器隔离、权限控制、防止 agent 逃逸。
+2. **可扩展性与性能**：预热容器池、异步任务队列、弹性伸缩。
+3. **成本优化**：模型路由、缓存重复请求、按需调用高成本云模型。
+4. **可观测性**：Tracing、Prometheus/Grafana 指标监控、报警。
+5. **开发者体验**：本地开发模式、热重载、mock LLM、CI 集成。
+6. **UX / Agent Builder**：模板、版本管理、policy 管理。
 
-**The complete platform for creating autonomous AI agents that work for you**
+## 1. 架构改进
+- **Backend API**：
+  - 增加 OpenTelemetry tracing、Prometheus metrics。
+  - 健康检查 endpoint `/healthz` 与 `/readyz`。
+  - 模型路由中间件，根据请求类型选择本地 / 云 LLM。
+  - 异步队列处理长任务（QStash / Redis / RabbitMQ）。
+- **Agent Runtime**：
+  - 预热容器池，减少冷启动延迟。
+  - 安全加固：非 root 用户、read-only filesystem、seccomp/AppArmor。
+  - Docker 多阶段构建，减少 attack surface。
+- **Frontend Dashboard**：
+  - 增加 agent 模板库、版本管理、policy 管理。
+  - 支持回放功能以复现会话。
+- **Database / Storage**：
+  - 对关键表建立索引和分区，Large files 放对象存储，DB 仅存元数据。
+  - 数据保留策略与冷存储。
 
-Kortix is a comprehensive open source platform that empowers you to build, manage, and train sophisticated AI agents for any use case. Create powerful agents that act autonomously on your behalf, from general-purpose assistants to specialized automation tools.
+## 2. 安全策略
+- Agent 容器：
+  - `USER nonroot`、`no-new-privileges`
+  - `--cap-drop=ALL`，`read-only` 根文件系统
+  - 限制网络访问，仅允许后端与 LLM endpoint
+  - Secrets 使用 Vault / cloud secret manager
+- 高风险操作需审批或双签。
 
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue)](./license)
-[![Discord Follow](https://dcbadge.limes.pink/api/server/Py6pCBUUPw?style=flat)](https://discord.gg/Py6pCBUUPw)
-[![Twitter Follow](https://img.shields.io/twitter/follow/kortixai)](https://x.com/kortixai)
-[![GitHub Repo stars](https://img.shields.io/github/stars/kortix-ai/suna)](https://github.com/kortix-ai/suna)
-[![Issues](https://img.shields.io/github/issues/kortix-ai/suna)](https://github.com/kortix-ai/suna/labels/bug)
+## 3. 可扩展性与性能
+- 异步任务队列 + worker pool
+- k8s HPA / serverless container pool
+- 冷启动优化：warm pool 预热浏览器与 runtime
 
-<!-- Keep these links. Translations will automatically update with the README. -->
-[Deutsch](https://www.readme-i18n.com/kortix-ai/suna?lang=de) | 
-[Español](https://www.readme-i18n.com/kortix-ai/suna?lang=es) | 
-[français](https://www.readme-i18n.com/kortix-ai/suna?lang=fr) | 
-[日本語](https://www.readme-i18n.com/kortix-ai/suna?lang=ja) | 
-[한국어](https://www.readme-i18n.com/kortix-ai/suna?lang=ko) | 
-[Português](https://www.readme-i18n.com/kortix-ai/suna?lang=pt) | 
-[Русский](https://www.readme-i18n.com/kortix-ai/suna?lang=ru) | 
-[中文](https://www.readme-i18n.com/kortix-ai/suna?lang=zh)
+## 4. 成本优化
+- Model Router：
+  - 请求类型、tenant、复杂度决定调用模型
+  - 本地 LLM / embeddings 优先
+  - 高成本云 LLM 按需调用
+- 结果缓存 / 微批请求合并
+- Prometheus 统计成本，dashboard 可查看每请求花费
 
-</div>
+## 5. 可观测性
+- OpenTelemetry traces + Jaeger
+- Prometheus metrics：
+  - agent active count
+  - queue length
+  - LLM latency
+  - failed tasks
+  - container start time
+- Grafana dashboard + 警报
 
-## 🌟 What Makes Kortix Special
+## 6. 开发者体验
+- docker-compose.dev.yaml
+- mock LLM
+- 热重载
+- replay 功能
 
-### 🤖 Includes Suna – Flagship Generalist AI Worker
-Meet Suna, our showcase agent that demonstrates the full power of the Kortix platform. Through natural conversation, Suna handles research, data analysis, browser automation, file management, and complex workflows – showing you what's possible when you build with Kortix.
+## 7. 部署与 CI
+- docker-compose.prod.yaml + HPA
+- GitHub Actions matrix：lint / unit test / integration
+- 可回放的 session 测试
 
-### 🔧 Build Custom Suna-Type Agents
-Create your own specialized agents tailored to specific domains, workflows, or business needs. Whether you need agents for customer service, data processing, content creation, or industry-specific tasks, Kortix provides the infrastructure and tools to build, deploy, and scale them.
+## 8. UX / Agent Builder
+- 模板库
+- 版本管理 + diff view
+- Policy / safety templates
 
-### 🚀 Complete Platform Capabilities
-- **Browser Automation**: Navigate websites, extract data, fill forms, automate web workflows
-- **File Management**: Create, edit, and organize documents, spreadsheets, presentations, code
-- **Web Intelligence**: Crawling, search capabilities, data extraction and synthesis
-- **System Operations**: Command-line execution, system administration, DevOps tasks
-- **API Integrations**: Connect with external services and automate cross-platform workflows
-- **Agent Builder**: Visual tools to configure, customize, and deploy agents
+🔹 2️⃣ 安全加固 Dockerfile + Run Flags
+# Dockerfile.agent (multi-stage)
+FROM python:3.11-slim AS builder
+WORKDIR /app
+COPY pyproject.toml poetry.lock ./
+RUN pip install --upgrade pip && pip install poetry && poetry export -f requirements.txt --output requirements.txt
+RUN pip install -r requirements.txt
 
-## 📋 Table of Contents
+FROM python:3.11-slim
+WORKDIR /app
+COPY --from=builder /app /app
+COPY agent_runtime /app/agent_runtime
+USER 1000:1000
+RUN mkdir -p /tmp/runtime && chmod 777 /tmp/runtime
+CMD ["python", "agent_runtime/main.py"]
 
-- [🌟 What Makes Kortix Special](#-what-makes-kortix-special)
-- [🎯 Agent Examples & Use Cases](#-agent-examples--use-cases)
-- [🏗️ Platform Architecture](#️-platform-architecture)
-- [🚀 Quick Start](#-quick-start)
-- [🏠 Self-Hosting](#-self-hosting)
-- [🤝 Contributing](#-contributing)
-- [📄 License](#-license)
 
-## 🎯 Agent Examples & Use Cases
+Docker run flags：
 
-### Suna - Your Generalist AI Worker
+docker run --rm \
+  --user 1000:1000 \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --security-opt seccomp=/path/to/seccomp.json \
+  --read-only \
+  -v /tmp/runtime:/tmp:rw \
+  kortix-agent:2.0
 
-Suna demonstrates the full capabilities of the Kortix platform as a versatile AI worker that can:
+🔹 3️⃣ FastAPI Observability + Health Endpoints
+# backend/middleware/observability.py
+from fastapi import FastAPI, Request
+from prometheus_client import Counter, Histogram, generate_latest
+from starlette.responses import Response
+import time
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-**🔍 Research & Analysis**
-- Conduct comprehensive web research across multiple sources
-- Analyze documents, reports, and datasets
-- Synthesize information and create detailed summaries
-- Market research and competitive intelligence
+REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint'])
+REQUEST_LATENCY = Histogram('http_request_latency_seconds', 'Request latency', ['endpoint'])
 
-**🌐 Browser Automation**
-- Navigate complex websites and web applications
-- Extract data from multiple pages automatically
-- Fill forms and submit information
-- Automate repetitive web-based workflows
+def setup(app: FastAPI):
+    FastAPIInstrumentor.instrument_app(app)
+    
+    @app.middleware("http")
+    async def metrics_middleware(request: Request, call_next):
+        start = time.time()
+        response = await call_next(request)
+        REQUEST_COUNT.labels(request.method, request.url.path).inc()
+        REQUEST_LATENCY.labels(request.url.path).observe(time.time() - start)
+        return response
 
-**📁 File & Document Management**
-- Create and edit documents, spreadsheets, presentations
-- Organize and structure file systems
-- Convert between different file formats
-- Generate reports and documentation
+    @app.get("/metrics")
+    async def metrics():
+        return Response(generate_latest(), media_type="text/plain")
 
-**📊 Data Processing & Analysis**
-- Clean and transform datasets from various sources
-- Perform statistical analysis and create visualizations
-- Monitor KPIs and generate insights
-- Integrate data from multiple APIs and databases
+    @app.get("/healthz")
+    async def healthz():
+        return {"status": "ok"}
 
-**⚙️ System Administration**
-- Execute command-line operations safely
-- Manage system configurations and deployments
-- Automate DevOps workflows
-- Monitor system health and performance
+    @app.get("/readyz")
+    async def readyz():
+        # 可加入 DB / Redis / LLM 健康检查
+        return {"status": "ready"}
 
-### Build Your Own Specialized Agents
+🔹 4️⃣ Model Router Python 示例 + YAML 策略
+# backend/model_router.py
+import os
 
-The Kortix platform enables you to create agents tailored to specific needs:
+MODEL_POLICY = {
+    "simple": "local_llm",
+    "research": "openai",
+    "high_cost": "anthropic"
+}
 
-**🎧 Customer Service Agents**
-- Handle support tickets and FAQ responses
-- Manage user onboarding and training
-- Escalate complex issues to human agents
-- Track customer satisfaction and feedback
+def route_model(request_type: str):
+    # 可拓展：按 tenant / cost threshold / token count
+    return MODEL_POLICY.get(request_type, "local_llm")
 
-**✍️ Content Creation Agents**
-- Generate marketing copy and social media posts
-- Create technical documentation and tutorials
-- Develop educational content and training materials
-- Maintain content calendars and publishing schedules
+# backend/model_policy.yaml
+default: local_llm
+policies:
+  - type: simple
+    model: local_llm
+  - type: research
+    model: openai
+  - type: high_cost
+    model: anthropic
 
-**📈 Sales & Marketing Agents**
-- Qualify leads and manage CRM systems
-- Schedule meetings and follow up with prospects
-- Create personalized outreach campaigns
-- Generate sales reports and forecasts
+🔹 5️⃣ docker-compose.dev.yaml（本地开发）
+version: "3.9"
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=dev
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - redis
+      - mock_llm
 
-**🔬 Research & Development Agents**
-- Conduct academic and scientific research
-- Monitor industry trends and innovations
-- Analyze patents and competitive landscapes
-- Generate research reports and recommendations
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
 
-**🏭 Industry-Specific Agents**
-- Healthcare: Patient data analysis, appointment scheduling
-- Finance: Risk assessment, compliance monitoring
-- Legal: Document review, case research
-- Education: Curriculum development, student assessment
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
 
-Each agent can be configured with custom tools, workflows, knowledge bases, and integrations specific to your requirements.
+  mock_llm:
+    image: python:3.11-slim
+    command: python -m http.server 9000
+    ports:
+      - "9000:9000"
 
-## 🏗️ Platform Architecture
 
-![Architecture Diagram](docs/images/diagram.png)
+启动命令：
 
-Kortix consists of four main components that work together to provide a complete AI agent development platform:
+make dev   # 或 docker-compose -f docker-compose.dev.yaml up --build
 
-### 🔧 Backend API
-Python/FastAPI service that powers the agent platform with REST endpoints, thread management, agent orchestration, and LLM integration with Anthropic, OpenAI, and others via LiteLLM. Includes agent builder tools, workflow management, and extensible tool system.
+🔹 6️⃣ Grafana Dashboard JSON & Prometheus Metrics 清单
 
-### 🖥️ Frontend Dashboard
-Next.js/React application providing a comprehensive agent management interface with chat interfaces, agent configuration dashboards, workflow builders, monitoring tools, and deployment controls.
+关键 metrics：
 
-### 🐳 Agent Runtime
-Isolated Docker execution environments for each agent instance featuring browser automation, code interpreter, file system access, tool integration, security sandboxing, and scalable agent deployment.
+http_requests_total{method,endpoint}
+http_request_latency_seconds{endpoint}
+agent_active_count
+queue_length
+llm_latency_seconds
+container_start_time_seconds
+failed_tasks_total
 
-### 🗄️ Database & Storage
-Supabase-powered data layer handling authentication, user management, agent configurations, conversation history, file storage, workflow state, analytics, and real-time subscriptions for live agent monitoring.
 
-## 🚀 Quick Start
+Grafana：
 
-Get your Kortix platform running in minutes with our automated setup wizard:
+面板：
 
-### 1️⃣ Clone the Repository
-```bash
-git clone https://github.com/kortix-ai/suna.git
-cd suna
-```
+Agent 活跃数（Gauge）
 
-### 2️⃣ Run the Setup Wizard
-```bash
-python setup.py
-```
-The wizard will guide you through 14 steps with progress saving, so you can resume if interrupted.
+队列长度（Line / Alert if > threshold）
 
-### 3️⃣ Start the Platform
-```bash
-python start.py
-```
+LLM 延迟（Histogram / Percentiles）
 
-That's it! Your Kortix platform will be running with Suna ready to assist you.
+Container 冷启动时间
 
-## 🏠 Self-Hosting
+Task failure rate + alert
 
-Kortix can be self-hosted on your own infrastructure using our comprehensive setup wizard, giving you complete control over your AI agent platform. For a complete guide to self-hosting Kortix, please refer to our [Self-Hosting Guide](./docs/SELF-HOSTING.md).
+警报：
 
-### 🔧 Setup Process Includes
+queue length > 50 -> Slack/PagerDuty
 
-- **🏗️ Infrastructure**: Supabase project setup for database and authentication
-- **⚡ Performance**: Redis configuration for caching and session management
-- **🛡️ Security**: Daytona setup for secure agent execution environments
-- **🤖 AI Integration**: LLM providers (Anthropic, OpenAI, OpenRouter, etc.)
-- **🌐 Web Capabilities**: Search and scraping (Tavily, Firecrawl)
-- **📋 Workflows**: QStash for background job processing
-- **🔗 Automation**: Webhook handling for automated tasks
-- **📊 Data Sources**: Optional RapidAPI integrations
+failed tasks > 10% -> Slack
 
-### 📚 Manual Setup
+LLM latency 95th percentile > 3s -> Slack
 
-For advanced users who prefer manual configuration, see the [Self-Hosting Guide](./docs/SELF-HOSTING.md) for detailed manual setup instructions.
-
-The wizard will guide you through all necessary steps to get your Kortix platform up and running. For detailed instructions, troubleshooting tips, and advanced configuration options, see the [Self-Hosting Guide](./docs/SELF-HOSTING.md).
-
-## 🤝 Contributing
-
-We welcome contributions from the community! Whether you're fixing bugs, adding features, or improving documentation, your help makes Kortix better for everyone.
-
-Please see our [Contributing Guide](./CONTRIBUTING.md) for more details on:
-- How to set up your development environment
-- Code style and standards
-- Pull request process
-- Community guidelines
-
-## 📄 License
-
-Kortix is licensed under the Apache License, Version 2.0. See [LICENSE](./LICENSE) for the full license text.
-
----
-
-<div align="center">
-
-**Ready to build your first AI agent?** 
-
-[Get Started](./docs/SELF-HOSTING.md) • [Join Discord](https://discord.gg/Py6pCBUUPw) • [Follow on Twitter](https://x.com/kortixai)
-
-</div>
+可以直接导入 JSON，我这里就不贴完整 JSON（可根据 metrics 清单生成）。
+>>>>>>> 3f1772397b6f3d63185af97ce784b4259f392c2e
